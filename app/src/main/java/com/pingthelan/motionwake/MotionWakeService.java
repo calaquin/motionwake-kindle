@@ -1,6 +1,5 @@
 package com.pingthelan.motionwake;
 
-import android.app.KeyguardManager;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
@@ -32,7 +31,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private PowerManager powerManager;
     private PowerManager.WakeLock cpuWakeLock;
     private PowerManager.WakeLock screenWakeLock;
-    private KeyguardManager.KeyguardLock keyguardLock;
 
     private final Handler handler = new Handler();
 
@@ -64,7 +62,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         loadPreferences();
         startForegroundCompat();
         acquireCpuWakeLock();
-        disableNonSecureKeyguard();
         startCamera();
     }
 
@@ -84,14 +81,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         handler.removeCallbacks(releaseScreenRunnable);
         stopCamera();
         releaseScreenWakeLock();
-
-        if (keyguardLock != null) {
-            try {
-                keyguardLock.reenableKeyguard();
-            } catch (Exception ignored) {
-            }
-            keyguardLock = null;
-        }
 
         if (cpuWakeLock != null && cpuWakeLock.isHeld()) {
             cpuWakeLock.release();
@@ -157,18 +146,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
                         | PowerManager.ON_AFTER_RELEASE,
                 "MotionWake:Screen");
         screenWakeLock.setReferenceCounted(false);
-    }
-
-    private void disableNonSecureKeyguard() {
-        try {
-            KeyguardManager km =
-                    (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-            keyguardLock = km.newKeyguardLock("MotionWake:Keyguard");
-            keyguardLock.disableKeyguard();
-            Log.i(TAG, "Requested non-secure keyguard disable");
-        } catch (Exception e) {
-            Log.e(TAG, "Could not disable keyguard", e);
-        }
     }
 
     private void startCamera() {
@@ -384,21 +361,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     }
 
     private void wakeDisplay() {
-
-        // Amazon's Fire OS build may reject disableKeyguard() even though
-        // DISABLE_KEYGUARD is declared. Keyguard handling is best-effort;
-        // failure here must never prevent the actual display wake.
-        if (keyguardLock != null) {
-            try {
-                keyguardLock.disableKeyguard();
-                Log.i(TAG, "Non-secure keyguard disable requested");
-            } catch (Throwable t) {
-                Log.w(TAG,
-                        "Keyguard disable unavailable; continuing with wake pulse",
-                        t);
-            }
-        }
-
         try {
             handler.removeCallbacks(releaseScreenRunnable);
 
@@ -419,8 +381,25 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
                 );
             }
 
+            // Fire OS rejects KeyguardManager.disableKeyguard() even though
+            // the permission is declared. Use the Android 4.x window-flag
+            // path instead: briefly show a transparent activity above the
+            // non-secure keyguard, dismiss it, then finish back to Silk.
+            Intent wakeIntent =
+                    new Intent(this, WakeActivity.class);
+
+            wakeIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            | Intent.FLAG_ACTIVITY_NO_ANIMATION
+            );
+
+            startActivity(wakeIntent);
+
+            Log.i(TAG, "WakeActivity launched");
+
         } catch (Throwable t) {
-            Log.e(TAG, "Unable to acquire wake pulse", t);
+            Log.e(TAG, "Unable to complete wake sequence", t);
         }
     }
 
