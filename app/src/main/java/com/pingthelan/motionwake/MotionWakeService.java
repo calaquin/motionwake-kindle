@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
+import android.graphics.PixelFormat;
 import android.hardware.Camera;
 import android.os.Handler;
 import android.os.IBinder;
@@ -15,6 +16,8 @@ import android.os.PowerManager;
 import android.os.SystemClock;
 import android.preference.PreferenceManager;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowManager;
 
 import java.util.List;
 
@@ -33,6 +36,9 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private PowerManager.WakeLock cpuWakeLock;
     private PowerManager.WakeLock visibleWakeLock;
     private PowerManager.WakeLock blankWakeLock;
+
+    private WindowManager overlayWindowManager;
+    private View blankOverlayView;
 
     private final Handler handler = new Handler();
 
@@ -60,6 +66,9 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     @Override
     public void onCreate() {
         super.onCreate();
+
+        overlayWindowManager =
+                (WindowManager) getSystemService(WINDOW_SERVICE);
 
         loadPreferences();
         startForegroundCompat();
@@ -89,7 +98,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     public void onDestroy() {
         handler.removeCallbacks(blankRunnable);
 
-        BlankActivity.finishActive();
+        removeBlankOverlay();
         releaseBlankWakeLock();
 
         stopCamera();
@@ -372,7 +381,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
                 powerManager != null && powerManager.isScreenOn();
 
         boolean wasBlank =
-                blankWakeLock != null && blankWakeLock.isHeld();
+                blankOverlayView != null;
 
         Log.i(TAG, "MOTION DETECTED: " + score
                 + "% screenOn=" + screenOn
@@ -386,12 +395,12 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
             // wake lock is held.
             acquireVisibleWakeLock();
 
-            boolean activityFound =
-                    BlankActivity.finishActive();
+            boolean overlayRemoved =
+                    removeBlankOverlay();
 
             Log.i(TAG,
-                    "Leaving blank mode; activityFound="
-                            + activityFound);
+                    "Leaving blank mode; overlayRemoved="
+                            + overlayRemoved);
 
             releaseBlankWakeLock();
 
@@ -433,27 +442,94 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
                         "Blank screen wake lock acquired");
             }
 
-            Intent blankIntent =
-                    new Intent(this, BlankActivity.class);
-
-            blankIntent.addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-                            | Intent.FLAG_ACTIVITY_NO_ANIMATION
-            );
-
-            startActivity(blankIntent);
+            if (!showBlankOverlay()) {
+                throw new IllegalStateException(
+                        "Unable to create blank overlay");
+            }
 
             // blankWakeLock was acquired first, so releasing the visible
             // lock here cannot allow Fire OS to sleep.
             releaseVisibleWakeLock();
 
             Log.i(TAG,
-                    "No motion for 30 seconds; BlankActivity launched");
+                    "No motion for 30 seconds; black overlay shown");
 
         } catch (Throwable t) {
             Log.e(TAG, "Unable to enter blank mode", t);
             releaseBlankWakeLock();
+        }
+    }
+
+    private boolean showBlankOverlay() {
+        if (blankOverlayView != null) {
+            return true;
+        }
+
+        if (overlayWindowManager == null) {
+            Log.e(TAG, "WindowManager unavailable");
+            return false;
+        }
+
+        try {
+            View overlay = new View(this);
+            overlay.setBackgroundColor(0xff000000);
+
+            WindowManager.LayoutParams params =
+                    new WindowManager.LayoutParams(
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            WindowManager.LayoutParams.TYPE_SYSTEM_ALERT,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                                    | WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                            PixelFormat.OPAQUE
+                    );
+
+            // Avoid absolute zero for the first overlay test. On this old
+            // Fire OS build, 1% should look effectively dark while avoiding
+            // any special zero-backlight behavior.
+            params.screenBrightness = 0.01f;
+            params.buttonBrightness = 0.0f;
+
+            overlayWindowManager.addView(overlay, params);
+            blankOverlayView = overlay;
+
+            Log.i(TAG,
+                    "Black overlay added at 1% brightness");
+
+            return true;
+
+        } catch (Throwable t) {
+            Log.e(TAG, "Unable to add black overlay", t);
+            blankOverlayView = null;
+            return false;
+        }
+    }
+
+    private boolean removeBlankOverlay() {
+        View overlay = blankOverlayView;
+
+        if (overlay == null) {
+            return false;
+        }
+
+        try {
+            if (overlayWindowManager != null) {
+                overlayWindowManager.removeViewImmediate(overlay);
+            }
+
+            blankOverlayView = null;
+
+            Log.i(TAG, "Black overlay removed");
+
+            return true;
+
+        } catch (Throwable t) {
+            Log.e(TAG, "Unable to remove black overlay", t);
+            blankOverlayView = null;
+            return false;
         }
     }
 
