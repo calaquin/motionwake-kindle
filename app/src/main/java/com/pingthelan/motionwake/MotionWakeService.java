@@ -17,7 +17,6 @@ import android.os.SystemClock;
 import android.preference.PreferenceManager;
 import android.util.Log;
 
-import java.io.IOException;
 import java.util.List;
 
 @SuppressWarnings("deprecation")
@@ -25,10 +24,12 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
 
     private static final String TAG = "MotionWake";
     private static final int NOTIFICATION_ID = 1001;
+    private static final long WAKE_PULSE_MS = 3000L;
 
     private Camera camera;
     private SurfaceTexture dummyTexture;
 
+    private PowerManager powerManager;
     private PowerManager.WakeLock cpuWakeLock;
     private PowerManager.WakeLock screenWakeLock;
     private KeyguardManager.KeyguardLock keyguardLock;
@@ -41,7 +42,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private int pixelDelta = 24;
     private int motionPercent = 8;
     private int sampleMs = 500;
-    private int holdSeconds = 60;
     private int consecutiveHitsRequired = 2;
 
     private long lastProcessedMs = 0;
@@ -114,14 +114,13 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         pixelDelta = p.getInt("pixelDelta", 24);
         motionPercent = p.getInt("motionPercent", 8);
         sampleMs = p.getInt("sampleMs", 500);
-        holdSeconds = p.getInt("holdSeconds", 60);
         consecutiveHitsRequired = p.getInt("consecutiveHits", 2);
 
         Log.i(TAG, "Settings: pixelDelta=" + pixelDelta
                 + " motionPercent=" + motionPercent
                 + " sampleMs=" + sampleMs
-                + " holdSeconds=" + holdSeconds
-                + " consecutiveHits=" + consecutiveHitsRequired);
+                + " consecutiveHits=" + consecutiveHitsRequired
+                + " wakePulseMs=" + WAKE_PULSE_MS);
     }
 
     private void startForegroundCompat() {
@@ -141,15 +140,19 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     }
 
     private void acquireCpuWakeLock() {
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        cpuWakeLock = pm.newWakeLock(
+        powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+
+        cpuWakeLock = powerManager.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "MotionWake:CameraCPU");
         cpuWakeLock.setReferenceCounted(false);
         cpuWakeLock.acquire();
 
-        screenWakeLock = pm.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK
+        // Do not hold this continuously. ACQUIRE_CAUSES_WAKEUP works when
+        // the lock transitions from unheld to held, so this is used only
+        // as a short pulse when motion occurs while the display is off.
+        screenWakeLock = powerManager.newWakeLock(
+                PowerManager.FULL_WAKE_LOCK
                         | PowerManager.ACQUIRE_CAUSES_WAKEUP
                         | PowerManager.ON_AFTER_RELEASE,
                 "MotionWake:Screen");
@@ -367,17 +370,46 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     }
 
     private void onMotionDetected(int score) {
-        Log.i(TAG, "MOTION DETECTED: " + score + "%");
+        boolean screenOn =
+                powerManager != null && powerManager.isScreenOn();
 
+        Log.i(TAG, "MOTION DETECTED: " + score
+                + "% screenOn=" + screenOn);
+
+        // Motion while the dashboard is already visible should not hold
+        // a screen wake lock. Fire OS remains responsible for timeout.
+        if (!screenOn) {
+            wakeDisplay();
+        }
+    }
+
+    private void wakeDisplay() {
         try {
-            if (screenWakeLock != null && !screenWakeLock.isHeld()) {
-                screenWakeLock.acquire();
-                Log.i(TAG, "Screen wake lock acquired");
+            // Fire OS can recreate the non-secure keyguard during sleep.
+            // Re-request suppression immediately before waking.
+            if (keyguardLock != null) {
+                keyguardLock.disableKeyguard();
             }
 
-            // Keep extending the hold period as motion continues.
             handler.removeCallbacks(releaseScreenRunnable);
-            handler.postDelayed(releaseScreenRunnable, holdSeconds * 1000L);
+
+            // ACQUIRE_CAUSES_WAKEUP requires a fresh acquisition. Ensure
+            // a stale held lock cannot prevent a new wake transition.
+            if (screenWakeLock != null && screenWakeLock.isHeld()) {
+                screenWakeLock.release();
+            }
+
+            if (screenWakeLock != null) {
+                screenWakeLock.acquire();
+
+                Log.i(TAG, "Wake pulse acquired for "
+                        + WAKE_PULSE_MS + " ms");
+
+                handler.postDelayed(
+                        releaseScreenRunnable,
+                        WAKE_PULSE_MS
+                );
+            }
 
         } catch (Throwable t) {
             Log.e(TAG, "Unable to wake screen", t);
@@ -388,7 +420,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         try {
             if (screenWakeLock != null && screenWakeLock.isHeld()) {
                 screenWakeLock.release();
-                Log.i(TAG, "Screen wake lock released");
+                Log.i(TAG, "Wake pulse released");
             }
         } catch (Throwable t) {
             Log.e(TAG, "Unable to release screen wake lock", t);

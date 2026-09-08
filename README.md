@@ -14,7 +14,7 @@ front-facing camera detects motion.
 - Front camera frames remain on-device.
 - Targets Android API 15.
 - Keeps a partial CPU wake lock while monitoring.
-- Uses a screen wake lock only after motion.
+- Uses a short screen wake pulse only when motion is detected while the display is off.
 - Attempts to disable the non-secure keyguard while the service is alive.
 - Starts automatically after boot.
 - Foreground service notification reduces the chance Fire OS kills it.
@@ -24,11 +24,10 @@ front-facing camera detects motion.
 - Pixel-change threshold: 24 / 255
 - Changed-pixel threshold: 8%
 - Sample interval: 500 ms
-- Screen hold after motion: 60 seconds
 - Consecutive motion samples: 2
 - Initial camera warmup: 3 seconds
 
-All five tuning values can be changed in the app.
+All four tuning values can be changed in the app.
 
 ## Build
 
@@ -80,7 +79,7 @@ app until it has been launched again manually.
 
 1. Start MotionWake.
 2. Open the Silk dashboard.
-3. Leave the Kindle alone for at least 60 seconds so Fire OS turns the display off.
+3. Leave the Kindle alone longer than the configured Fire OS display timeout so the display turns off.
 4. Move in front of the front camera.
 5. Watch `adb logcat -s MotionWake`.
 6. Confirm the display wakes and Silk is visible without a swipe.

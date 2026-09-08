@@ -19,7 +19,6 @@ public class MainActivity extends Activity {
     private EditText pixelDelta;
     private EditText motionPercent;
     private EditText sampleMs;
-    private EditText holdSeconds;
     private EditText consecutiveHits;
 
     @Override
@@ -55,8 +54,6 @@ public class MainActivity extends Activity {
                 String.valueOf(p.getInt("motionPercent", 8)));
         sampleMs = addNumberField(layout, "Sampling interval (ms)", 
                 String.valueOf(p.getInt("sampleMs", 500)));
-        holdSeconds = addNumberField(layout, "Keep screen awake after motion (seconds)", 
-                String.valueOf(p.getInt("holdSeconds", 60)));
         consecutiveHits = addNumberField(layout, "Consecutive motion samples required", 
                 String.valueOf(p.getInt("consecutiveHits", 2)));
 
@@ -91,7 +88,6 @@ public class MainActivity extends Activity {
             "Pixel threshold: 24\n" +
             "Motion: 8%\n" +
             "Sample: 500 ms\n" +
-            "Screen hold: 60 sec\n" +
             "Hits: 2\n\n" +
             "ADB logs:\n" +
             "adb logcat -s MotionWake"
@@ -122,7 +118,6 @@ public class MainActivity extends Activity {
         e.putInt("pixelDelta", parse(pixelDelta, 24, 1, 255));
         e.putInt("motionPercent", parse(motionPercent, 8, 1, 100));
         e.putInt("sampleMs", parse(sampleMs, 500, 100, 10000));
-        e.putInt("holdSeconds", parse(holdSeconds, 60, 5, 3600));
         e.putInt("consecutiveHits", parse(consecutiveHits, 2, 1, 20));
         e.apply();
     }
