@@ -90,14 +90,8 @@ public class BlankActivity extends Activity {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        if (event.getAction() == MotionEvent.ACTION_DOWN) {
-            Log.i(TAG,
-                    "Blank screen touched; revealing previous app");
-
-            finish();
-            overridePendingTransition(0, 0);
-        }
-
+        // Consume touches while blank. Motion detection owns the reveal
+        // transition so wake-lock handoff always happens atomically.
         return true;
     }
 

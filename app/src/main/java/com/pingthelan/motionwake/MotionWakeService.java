@@ -23,7 +23,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
 
     private static final String TAG = "MotionWake";
     private static final int NOTIFICATION_ID = 1001;
-    private static final long WAKE_PULSE_MS = 3000L;
     private static final long BLANK_DELAY_MS = 30000L;
     private static final long BLANK_SETTLE_MS = 1500L;
 
@@ -32,7 +31,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
 
     private PowerManager powerManager;
     private PowerManager.WakeLock cpuWakeLock;
-    private PowerManager.WakeLock screenWakeLock;
+    private PowerManager.WakeLock visibleWakeLock;
     private PowerManager.WakeLock blankWakeLock;
 
     private final Handler handler = new Handler();
@@ -50,13 +49,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private int consecutiveHits = 0;
 
     private byte[] previousY;
-
-    private final Runnable releaseScreenRunnable = new Runnable() {
-        @Override
-        public void run() {
-            releaseScreenWakeLock();
-        }
-    };
 
     private final Runnable blankRunnable = new Runnable() {
         @Override
@@ -84,6 +76,10 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
             startCamera();
         }
 
+        if (blankWakeLock == null || !blankWakeLock.isHeld()) {
+            acquireVisibleWakeLock();
+        }
+
         scheduleBlank();
 
         return START_STICKY;
@@ -91,14 +87,13 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
 
     @Override
     public void onDestroy() {
-        handler.removeCallbacks(releaseScreenRunnable);
         handler.removeCallbacks(blankRunnable);
 
         BlankActivity.finishActive();
         releaseBlankWakeLock();
 
         stopCamera();
-        releaseScreenWakeLock();
+        releaseVisibleWakeLock();
 
         if (cpuWakeLock != null && cpuWakeLock.isHeld()) {
             cpuWakeLock.release();
@@ -126,8 +121,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         Log.i(TAG, "Settings: pixelDelta=" + pixelDelta
                 + " motionPercent=" + motionPercent
                 + " sampleMs=" + sampleMs
-                + " consecutiveHits=" + consecutiveHitsRequired
-                + " wakePulseMs=" + WAKE_PULSE_MS);
+                + " consecutiveHits=" + consecutiveHitsRequired);
     }
 
     private void startForegroundCompat() {
@@ -155,15 +149,16 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         cpuWakeLock.setReferenceCounted(false);
         cpuWakeLock.acquire();
 
-        // Do not hold this continuously. ACQUIRE_CAUSES_WAKEUP works when
-        // the lock transitions from unheld to held, so this is used only
-        // as a short pulse when motion occurs while the display is off.
-        screenWakeLock = powerManager.newWakeLock(
-                PowerManager.FULL_WAKE_LOCK
-                        | PowerManager.ACQUIRE_CAUSES_WAKEUP
-                        | PowerManager.ON_AFTER_RELEASE,
-                "MotionWake:Screen");
-        screenWakeLock.setReferenceCounted(false);
+        // MotionWake owns the visible-display lifecycle. Holding this
+        // continuously while the dashboard is visible prevents Fire OS's
+        // inactivity timer from ever reaching the keyguard.
+        visibleWakeLock = powerManager.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK
+                        | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "MotionWake:VisibleScreen");
+        visibleWakeLock.setReferenceCounted(false);
+
+        acquireVisibleWakeLock();
 
         // Held only while the fake-off black screen is active.
         // Unlike FLAG_KEEP_SCREEN_ON alone, this prevents Fire OS from
@@ -386,6 +381,11 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         handler.removeCallbacks(blankRunnable);
 
         if (wasBlank) {
+            // Acquire the visible lock BEFORE releasing the blank lock.
+            // This guarantees Fire OS never sees a gap where no screen
+            // wake lock is held.
+            acquireVisibleWakeLock();
+
             boolean activityFound =
                     BlankActivity.finishActive();
 
@@ -395,16 +395,12 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
 
             releaseBlankWakeLock();
 
-            // Give the camera time to adjust to the dashboard lighting.
+            // Give the camera time to adjust to dashboard lighting.
             settleMotionDetector(1000L);
 
-            // Give Android a fresh screen-on/user-activity period after
-            // potentially spending hours behind the blank wake lock.
-            wakeDisplay();
-
         } else if (!screenOn) {
-            // Genuine sleep remains only a fallback case.
-            wakeDisplay();
+            // Fallback if the display somehow genuinely sleeps.
+            acquireVisibleWakeLock();
         }
 
         scheduleBlank();
@@ -448,6 +444,10 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
 
             startActivity(blankIntent);
 
+            // blankWakeLock was acquired first, so releasing the visible
+            // lock here cannot allow Fire OS to sleep.
+            releaseVisibleWakeLock();
+
             Log.i(TAG,
                     "No motion for 30 seconds; BlankActivity launched");
 
@@ -464,29 +464,37 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
                 SystemClock.elapsedRealtime() + durationMs;
     }
 
-    private void wakeDisplay() {
+    private void acquireVisibleWakeLock() {
         try {
-            handler.removeCallbacks(releaseScreenRunnable);
+            if (visibleWakeLock != null
+                    && !visibleWakeLock.isHeld()) {
 
-            // ACQUIRE_CAUSES_WAKEUP requires a fresh acquisition.
-            if (screenWakeLock != null && screenWakeLock.isHeld()) {
-                screenWakeLock.release();
+                visibleWakeLock.acquire();
+
+                Log.i(TAG,
+                        "Visible screen wake lock acquired");
             }
-
-            if (screenWakeLock != null) {
-                screenWakeLock.acquire();
-
-                Log.i(TAG, "Wake pulse acquired for "
-                        + WAKE_PULSE_MS + " ms");
-
-                handler.postDelayed(
-                        releaseScreenRunnable,
-                        WAKE_PULSE_MS
-                );
-            }
-
         } catch (Throwable t) {
-            Log.e(TAG, "Unable to complete wake sequence", t);
+            Log.e(TAG,
+                    "Unable to acquire visible screen wake lock",
+                    t);
+        }
+    }
+
+    private void releaseVisibleWakeLock() {
+        try {
+            if (visibleWakeLock != null
+                    && visibleWakeLock.isHeld()) {
+
+                visibleWakeLock.release();
+
+                Log.i(TAG,
+                        "Visible screen wake lock released");
+            }
+        } catch (Throwable t) {
+            Log.e(TAG,
+                    "Unable to release visible screen wake lock",
+                    t);
         }
     }
 
@@ -504,17 +512,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
             Log.e(TAG,
                     "Unable to release blank screen wake lock",
                     t);
-        }
-    }
-
-    private void releaseScreenWakeLock() {
-        try {
-            if (screenWakeLock != null && screenWakeLock.isHeld()) {
-                screenWakeLock.release();
-                Log.i(TAG, "Wake pulse released");
-            }
-        } catch (Throwable t) {
-            Log.e(TAG, "Unable to release screen wake lock", t);
         }
     }
 
