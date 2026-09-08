@@ -1,10 +1,6 @@
 package com.pingthelan.motionwake;
 
 import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.MotionEvent;
@@ -14,27 +10,49 @@ import android.widget.FrameLayout;
 
 public class BlankActivity extends Activity {
 
-    public static final String ACTION_REVEAL =
-            "com.pingthelan.motionwake.action.REVEAL";
-
     private static final String TAG = "MotionWake";
 
-    private BroadcastReceiver revealReceiver;
+    private static BlankActivity activeInstance;
+
+    public static boolean finishActive() {
+        final BlankActivity activity = activeInstance;
+
+        if (activity == null) {
+            return false;
+        }
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (!activity.isFinishing()) {
+                    Log.i(TAG,
+                            "BlankActivity finishing; revealing previous app");
+                    activity.finish();
+                    activity.overridePendingTransition(0, 0);
+                }
+            }
+        });
+
+        return true;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        activeInstance = this;
 
         getWindow().addFlags(
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                         | WindowManager.LayoutParams.FLAG_FULLSCREEN
         );
 
-        // Keep Android awake, but drive the LCD backlight to its
-        // minimum possible level for this window.
-        WindowManager.LayoutParams params = getWindow().getAttributes();
+        WindowManager.LayoutParams params =
+                getWindow().getAttributes();
+
         params.screenBrightness = 0.0f;
         params.buttonBrightness = 0.0f;
+
         getWindow().setAttributes(params);
 
         FrameLayout root = new FrameLayout(this);
@@ -43,23 +61,15 @@ public class BlankActivity extends Activity {
 
         hideSystemUi();
 
-        revealReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if (ACTION_REVEAL.equals(intent.getAction())) {
-                    Log.i(TAG, "Reveal signal received; leaving blank mode");
-                    revealDashboard();
-                }
-            }
-        };
-
-        registerReceiver(
-                revealReceiver,
-                new IntentFilter(ACTION_REVEAL)
-        );
-
         Log.i(TAG,
                 "Blank mode active; screen black at minimum brightness");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        activeInstance = this;
+        hideSystemUi();
     }
 
     @Override
@@ -78,19 +88,14 @@ public class BlankActivity extends Activity {
         );
     }
 
-    private void revealDashboard() {
-        if (!isFinishing()) {
-            finish();
-            overridePendingTransition(0, 0);
-        }
-    }
-
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // Touching the fake-off display should reveal it too.
         if (event.getAction() == MotionEvent.ACTION_DOWN) {
-            Log.i(TAG, "Blank screen touched; revealing dashboard");
-            revealDashboard();
+            Log.i(TAG,
+                    "Blank screen touched; revealing previous app");
+
+            finish();
+            overridePendingTransition(0, 0);
         }
 
         return true;
@@ -98,13 +103,8 @@ public class BlankActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (revealReceiver != null) {
-            try {
-                unregisterReceiver(revealReceiver);
-            } catch (Exception ignored) {
-            }
-
-            revealReceiver = null;
+        if (activeInstance == this) {
+            activeInstance = null;
         }
 
         super.onDestroy();

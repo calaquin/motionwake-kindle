@@ -28,7 +28,6 @@
         <activity
             android:name=".BlankActivity"
             android:excludeFromRecents="true"
-            android:noHistory="true"
             android:exported="false"
             android:launchMode="singleInstance"
             android:taskAffinity=""
