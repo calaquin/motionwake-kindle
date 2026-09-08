@@ -26,11 +26,13 @@
         </activity>
 
         <activity
-            android:name=".WakeActivity"
+            android:name=".BlankActivity"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
         <service
             android:name=".MotionWakeService"

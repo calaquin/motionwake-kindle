@@ -24,6 +24,8 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private static final String TAG = "MotionWake";
     private static final int NOTIFICATION_ID = 1001;
     private static final long WAKE_PULSE_MS = 3000L;
+    private static final long BLANK_DELAY_MS = 30000L;
+    private static final long BLANK_SETTLE_MS = 1500L;
 
     private Camera camera;
     private SurfaceTexture dummyTexture;
@@ -55,6 +57,13 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         }
     };
 
+    private final Runnable blankRunnable = new Runnable() {
+        @Override
+        public void run() {
+            enterBlankMode();
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -63,6 +72,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         startForegroundCompat();
         acquireCpuWakeLock();
         startCamera();
+        scheduleBlank();
     }
 
     @Override
@@ -73,12 +83,16 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
             startCamera();
         }
 
+        scheduleBlank();
+
         return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
         handler.removeCallbacks(releaseScreenRunnable);
+        handler.removeCallbacks(blankRunnable);
+        sendRevealSignal();
         stopCamera();
         releaseScreenWakeLock();
 
@@ -353,11 +367,85 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         Log.i(TAG, "MOTION DETECTED: " + score
                 + "% screenOn=" + screenOn);
 
-        // Motion while the dashboard is already visible should not hold
-        // a screen wake lock. Fire OS remains responsible for timeout.
+        // A real motion event always resets our own fake-off timer.
+        handler.removeCallbacks(blankRunnable);
+
+        // If BlankActivity is active, this closes it immediately and
+        // exposes the task that was underneath it.
+        sendRevealSignal();
+
+        // Revealing the dashboard changes the light coming from the screen.
+        // Give the camera a moment to establish a fresh baseline.
+        settleMotionDetector(1000L);
+
+        // Genuine screen-off is now only a fallback case. Normal operation
+        // should stay awake inside BlankActivity and never reach keyguard.
         if (!screenOn) {
             wakeDisplay();
         }
+
+        scheduleBlank();
+    }
+
+    private void scheduleBlank() {
+        handler.removeCallbacks(blankRunnable);
+        handler.postDelayed(blankRunnable, BLANK_DELAY_MS);
+    }
+
+    private void enterBlankMode() {
+        boolean screenOn =
+                powerManager != null && powerManager.isScreenOn();
+
+        if (!screenOn) {
+            Log.i(TAG,
+                    "Display already genuinely off; skipping fake-off mode");
+            return;
+        }
+
+        try {
+            // Turning the LCD from a bright dashboard to black can itself
+            // alter the camera image. Reset the detector and let it settle
+            // so blank mode does not immediately wake itself back up.
+            settleMotionDetector(BLANK_SETTLE_MS);
+
+            Intent blankIntent =
+                    new Intent(this, BlankActivity.class);
+
+            blankIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_NO_HISTORY
+                            | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                            | Intent.FLAG_ACTIVITY_NO_ANIMATION
+            );
+
+            startActivity(blankIntent);
+
+            Log.i(TAG,
+                    "No motion for 30 seconds; BlankActivity launched");
+
+        } catch (Throwable t) {
+            Log.e(TAG, "Unable to enter blank mode", t);
+        }
+    }
+
+    private void sendRevealSignal() {
+        try {
+            Intent reveal =
+                    new Intent(BlankActivity.ACTION_REVEAL);
+
+            reveal.setPackage(getPackageName());
+            sendBroadcast(reveal);
+
+        } catch (Throwable t) {
+            Log.e(TAG, "Unable to send reveal signal", t);
+        }
+    }
+
+    private void settleMotionDetector(long durationMs) {
+        previousY = null;
+        consecutiveHits = 0;
+        warmupUntilMs =
+                SystemClock.elapsedRealtime() + durationMs;
     }
 
     private void wakeDisplay() {
@@ -380,23 +468,6 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
                         WAKE_PULSE_MS
                 );
             }
-
-            // Fire OS rejects KeyguardManager.disableKeyguard() even though
-            // the permission is declared. Use the Android 4.x window-flag
-            // path instead: briefly show a transparent activity above the
-            // non-secure keyguard, dismiss it, then finish back to Silk.
-            Intent wakeIntent =
-                    new Intent(this, WakeActivity.class);
-
-            wakeIntent.addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            | Intent.FLAG_ACTIVITY_NO_ANIMATION
-            );
-
-            startActivity(wakeIntent);
-
-            Log.i(TAG, "WakeActivity launched");
 
         } catch (Throwable t) {
             Log.e(TAG, "Unable to complete wake sequence", t);
