@@ -384,17 +384,25 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     }
 
     private void wakeDisplay() {
-        try {
-            // Fire OS can recreate the non-secure keyguard during sleep.
-            // Re-request suppression immediately before waking.
-            if (keyguardLock != null) {
-                keyguardLock.disableKeyguard();
-            }
 
+        // Amazon's Fire OS build may reject disableKeyguard() even though
+        // DISABLE_KEYGUARD is declared. Keyguard handling is best-effort;
+        // failure here must never prevent the actual display wake.
+        if (keyguardLock != null) {
+            try {
+                keyguardLock.disableKeyguard();
+                Log.i(TAG, "Non-secure keyguard disable requested");
+            } catch (Throwable t) {
+                Log.w(TAG,
+                        "Keyguard disable unavailable; continuing with wake pulse",
+                        t);
+            }
+        }
+
+        try {
             handler.removeCallbacks(releaseScreenRunnable);
 
-            // ACQUIRE_CAUSES_WAKEUP requires a fresh acquisition. Ensure
-            // a stale held lock cannot prevent a new wake transition.
+            // ACQUIRE_CAUSES_WAKEUP requires a fresh acquisition.
             if (screenWakeLock != null && screenWakeLock.isHeld()) {
                 screenWakeLock.release();
             }
@@ -412,7 +420,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
             }
 
         } catch (Throwable t) {
-            Log.e(TAG, "Unable to wake screen", t);
+            Log.e(TAG, "Unable to acquire wake pulse", t);
         }
     }
 
