@@ -40,8 +40,8 @@ public class MainActivity extends Activity {
         TextView info = new TextView(this);
         info.setText(
             "Camera-only motion wake helper for the Kindle dashboard.\n\n" +
-            "It stores no images and requests no network permission.\n" +
-            "After starting it, return to Silk and leave the dashboard open."
+            "It stores no camera images and transmits no camera data.\n" +
+            "The built-in dashboard client connects only to the configured Pi dashboard."
         );
         info.setTextSize(16);
         layout.addView(info);
@@ -63,9 +63,12 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) {
                 savePreferences();
                 startService(new Intent(MainActivity.this, MotionWakeService.class));
-                Toast.makeText(MainActivity.this,
-                        "MotionWake started. Return to Silk.",
-                        Toast.LENGTH_LONG).show();
+                startActivity(
+                        new Intent(
+                                MainActivity.this,
+                                DashboardActivity.class
+                        )
+                );
             }
         });
         layout.addView(saveStart);
