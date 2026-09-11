@@ -9,7 +9,7 @@ front-facing camera detects motion.
 - Native Android Camera API.
 - No AndroidX.
 - No Google Play Services.
-- No network permission.
+- Network access is used only for the two configured dashboard servers.
 - No image/video storage.
 - Front camera frames remain on-device.
 - Targets Android API 15.
@@ -20,6 +20,9 @@ front-facing camera detects motion.
 - Foreground service notification reduces the chance Fire OS kills it.
 - The dashboard WebView bypasses and clears its cache on launch so deployments
   are not hidden by stale HTML.
+- The dashboard prefers PingTheLan at `10.0.0.133:8099`, falls back to
+  Pi-PingTheLan at `10.0.0.179:8099`, and checks every 15 seconds so it can
+  switch in either direction as availability changes.
 
 ## Default motion settings
 

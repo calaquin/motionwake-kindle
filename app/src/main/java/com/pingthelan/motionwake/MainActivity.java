@@ -41,7 +41,8 @@ public class MainActivity extends Activity {
         info.setText(
             "Camera-only motion wake helper for the Kindle dashboard.\n\n" +
             "It stores no camera images and transmits no camera data.\n" +
-            "The built-in dashboard client connects only to the configured Pi dashboard."
+            "The dashboard prefers PingTheLan and automatically falls back " +
+            "to Pi-PingTheLan."
         );
         info.setTextSize(16);
         layout.addView(info);
