@@ -18,6 +18,8 @@ front-facing camera detects motion.
 - Attempts to disable the non-secure keyguard while the service is alive.
 - Starts automatically after boot.
 - Foreground service notification reduces the chance Fire OS kills it.
+- The dashboard WebView bypasses and clears its cache on launch so deployments
+  are not hidden by stale HTML.
 
 ## Default motion settings
 
