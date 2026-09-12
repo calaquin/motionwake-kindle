@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="device_admin_description">Allows MotionWake to turn the Kindle display fully off after dashboard inactivity.</string>
+</resources>

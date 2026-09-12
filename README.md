@@ -13,9 +13,15 @@ front-facing camera detects motion.
 - No image/video storage.
 - Front camera frames remain on-device.
 - Targets Android API 15.
-- Keeps a partial CPU wake lock while monitoring.
-- Uses a short screen wake pulse only when motion is detected while the display is off.
-- Attempts to disable the non-secure keyguard while the service is alive.
+- Keeps only a partial CPU wake lock while the panel is off so camera motion
+  detection can continue.
+- Uses Android device-administrator `force-lock` permission to power the panel
+  fully off after 30 seconds without motion. It does not set a PIN/password,
+  wipe data, or request any other administrator policy.
+- On motion, acquires a fresh display wake lock and shows the dashboard in a
+  full-screen system overlay above the Fire OS Special Offers lock screen.
+- Falls back to the original dim black overlay if device-administrator access
+  is unavailable or declined.
 - Starts automatically after boot.
 - Foreground service notification reduces the chance Fire OS kills it.
 - The dashboard WebView bypasses and clears its cache on launch so deployments
@@ -57,7 +63,11 @@ Launch the configuration screen:
 adb shell am start -n com.pingthelan.motionwake/.MainActivity
 ```
 
-Tap **Save and Start MotionWake**, then return to Silk.
+Tap **Save and Start MotionWake**. The dashboard opens automatically.
+
+The first start asks for one-time device-administrator permission. Enable it
+to let MotionWake turn the panel fully off. The app's **Disable Real
+Screen-Off** button stops MotionWake and revokes that permission.
 
 ## Logs
 
@@ -83,11 +93,11 @@ app until it has been launched again manually.
 ## First motion test
 
 1. Start MotionWake.
-2. Open the Silk dashboard.
-3. Leave the Kindle alone longer than the configured Fire OS display timeout so the display turns off.
+2. The app opens its dashboard WebView automatically.
+3. Leave the Kindle alone for 30 seconds so the panel turns fully off.
 4. Move in front of the front camera.
 5. Watch `adb logcat -s MotionWake`.
-6. Confirm the display wakes and Silk is visible without a swipe.
+6. Confirm the display wakes directly to the dashboard without a swipe.
 
 If the screen stays off but logs report motion, the camera detector is working
 and only the Fire-specific wake behavior needs adjustment.

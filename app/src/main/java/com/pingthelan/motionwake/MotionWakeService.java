@@ -3,6 +3,9 @@ package com.pingthelan.motionwake;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.app.KeyguardManager;
+import android.app.admin.DevicePolicyManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -10,6 +13,7 @@ import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
 import android.graphics.PixelFormat;
 import android.hardware.Camera;
+import android.content.pm.ActivityInfo;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -28,6 +32,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private static final int NOTIFICATION_ID = 1001;
     private static final long BLANK_DELAY_MS = 30000L;
     private static final long BLANK_SETTLE_MS = 1500L;
+    private static final long LOCK_NOW_SETTLE_MS = 350L;
 
     private Camera camera;
     private SurfaceTexture dummyTexture;
@@ -36,9 +41,14 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private PowerManager.WakeLock cpuWakeLock;
     private PowerManager.WakeLock visibleWakeLock;
     private PowerManager.WakeLock blankWakeLock;
+    private DevicePolicyManager devicePolicyManager;
+    private ComponentName deviceAdminComponent;
+    private KeyguardManager keyguardManager;
 
     private WindowManager overlayWindowManager;
     private View blankOverlayView;
+    private DashboardWebView dashboardOverlayView;
+    private boolean realScreenOffActive;
 
     private final Handler handler = new Handler();
 
@@ -63,12 +73,45 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         }
     };
 
+    private final Runnable lockNowRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!realScreenOffActive) {
+                return;
+            }
+
+            try {
+                if (!isRealScreenOffEnabled()) {
+                    throw new IllegalStateException(
+                            "Device administrator is no longer active"
+                    );
+                }
+
+                devicePolicyManager.lockNow();
+                Log.i(TAG, "Display powered off with DevicePolicyManager");
+            } catch (Throwable error) {
+                Log.e(TAG, "Real screen-off failed; using dim fallback", error);
+                realScreenOffActive = false;
+                acquireVisibleWakeLock();
+                enterDimFallback();
+            }
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
 
         overlayWindowManager =
                 (WindowManager) getSystemService(WINDOW_SERVICE);
+        devicePolicyManager = (DevicePolicyManager)
+                getSystemService(Context.DEVICE_POLICY_SERVICE);
+        deviceAdminComponent = new ComponentName(
+                this,
+                MotionWakeDeviceAdminReceiver.class
+        );
+        keyguardManager = (KeyguardManager)
+                getSystemService(Context.KEYGUARD_SERVICE);
 
         loadPreferences();
         startForegroundCompat();
@@ -97,8 +140,10 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     @Override
     public void onDestroy() {
         handler.removeCallbacks(blankRunnable);
+        handler.removeCallbacks(lockNowRunnable);
 
         removeBlankOverlay();
+        removeDashboardOverlay();
         releaseBlankWakeLock();
 
         stopCamera();
@@ -380,14 +425,21 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         boolean screenOn =
                 powerManager != null && powerManager.isScreenOn();
 
+        boolean keyguardShowing =
+                keyguardManager != null
+                        && keyguardManager.inKeyguardRestrictedInputMode();
+
         boolean wasBlank =
                 blankOverlayView != null;
 
         Log.i(TAG, "MOTION DETECTED: " + score
                 + "% screenOn=" + screenOn
-                + " blankMode=" + wasBlank);
+                + " blankMode=" + wasBlank
+                + " realScreenOff=" + realScreenOffActive
+                + " keyguard=" + keyguardShowing);
 
         handler.removeCallbacks(blankRunnable);
+        handler.removeCallbacks(lockNowRunnable);
 
         if (wasBlank) {
             // Acquire the visible lock BEFORE releasing the blank lock.
@@ -407,9 +459,10 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
             // Give the camera time to adjust to dashboard lighting.
             settleMotionDetector(1000L);
 
-        } else if (!screenOn) {
-            // Fallback if the display somehow genuinely sleeps.
-            acquireVisibleWakeLock();
+        } else if (!screenOn
+                || realScreenOffActive
+                || (keyguardShowing && dashboardOverlayView == null)) {
+            wakeDashboard();
         }
 
         scheduleBlank();
@@ -425,10 +478,62 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
                 powerManager != null && powerManager.isScreenOn();
 
         if (!screenOn) {
+            settleMotionDetector(BLANK_SETTLE_MS);
+            removeBlankOverlay();
+            removeDashboardOverlay();
+            releaseBlankWakeLock();
+            releaseVisibleWakeLock();
+            realScreenOffActive = isRealScreenOffEnabled();
+
             Log.i(TAG,
-                    "Display already genuinely off; skipping fake-off mode");
+                    "Display already genuinely off; overlays and visible "
+                            + "wake locks released");
             return;
         }
+
+        if (isRealScreenOffEnabled()) {
+            enterRealScreenOff();
+            return;
+        }
+
+        enterDimFallback();
+    }
+
+    private boolean isRealScreenOffEnabled() {
+        return devicePolicyManager != null
+                && deviceAdminComponent != null
+                && devicePolicyManager.isAdminActive(deviceAdminComponent);
+    }
+
+    private void enterRealScreenOff() {
+        try {
+            settleMotionDetector(BLANK_SETTLE_MS);
+            removeBlankOverlay();
+            removeDashboardOverlay();
+            releaseBlankWakeLock();
+
+            realScreenOffActive = true;
+
+            sendBroadcast(new Intent(
+                    DashboardActivity.ACTION_PREPARE_SCREEN_OFF
+            ));
+
+            releaseVisibleWakeLock();
+            handler.postDelayed(lockNowRunnable, LOCK_NOW_SETTLE_MS);
+
+            Log.i(TAG,
+                    "No motion for 30 seconds; requesting real screen-off");
+        } catch (Throwable error) {
+            Log.e(TAG, "Unable to prepare real screen-off", error);
+            realScreenOffActive = false;
+            acquireVisibleWakeLock();
+            enterDimFallback();
+        }
+    }
+
+    private void enterDimFallback() {
+        realScreenOffActive = false;
+        removeDashboardOverlay();
 
         try {
             settleMotionDetector(BLANK_SETTLE_MS);
@@ -458,6 +563,121 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
             Log.e(TAG, "Unable to enter blank mode", t);
             releaseBlankWakeLock();
         }
+    }
+
+    private void wakeDashboard() {
+        realScreenOffActive = false;
+
+        // ACQUIRE_CAUSES_WAKEUP only acts on a fresh acquisition.
+        releaseVisibleWakeLock();
+        acquireVisibleWakeLock();
+
+        if (showDashboardOverlay()) {
+            settleMotionDetector(1000L);
+            Log.i(TAG, "Motion wake showed dashboard system overlay");
+            return;
+        }
+
+        Intent dashboardIntent = new Intent(
+                this,
+                DashboardActivity.class
+        );
+        dashboardIntent.putExtra(
+                DashboardActivity.EXTRA_MOTION_WAKE,
+                true
+        );
+        dashboardIntent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION
+        );
+
+        startActivity(dashboardIntent);
+        settleMotionDetector(1000L);
+
+        Log.i(TAG, "Motion wake launched dashboard above keyguard");
+    }
+
+    private boolean showDashboardOverlay() {
+        if (dashboardOverlayView != null) {
+            dashboardOverlayView.hideSystemUi();
+            return true;
+        }
+
+        if (overlayWindowManager == null) {
+            Log.e(TAG, "WindowManager unavailable for dashboard overlay");
+            return false;
+        }
+
+        DashboardWebView view = null;
+
+        try {
+            view = new DashboardWebView(this);
+
+            WindowManager.LayoutParams params =
+                    new WindowManager.LayoutParams(
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            WindowManager.LayoutParams.TYPE_SYSTEM_ERROR,
+                            WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                    | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                            PixelFormat.OPAQUE
+                    );
+
+            params.screenOrientation =
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+            params.screenBrightness =
+                    WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+            params.buttonBrightness = 0.0f;
+
+            overlayWindowManager.addView(view, params);
+            dashboardOverlayView = view;
+            view.hideSystemUi();
+            view.start();
+
+            Log.i(TAG, "Dashboard system overlay added above keyguard");
+            return true;
+        } catch (Throwable error) {
+            Log.e(TAG, "Unable to add dashboard system overlay", error);
+
+            if (view != null) {
+                try {
+                    view.shutdown();
+                } catch (Throwable ignored) {
+                }
+            }
+
+            return false;
+        }
+    }
+
+    private void removeDashboardOverlay() {
+        DashboardWebView view = dashboardOverlayView;
+
+        if (view == null) {
+            return;
+        }
+
+        dashboardOverlayView = null;
+
+        try {
+            if (overlayWindowManager != null) {
+                overlayWindowManager.removeViewImmediate(view);
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to remove dashboard system overlay", error);
+        }
+
+        try {
+            view.shutdown();
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to destroy dashboard overlay WebView", error);
+        }
+
+        Log.i(TAG, "Dashboard system overlay removed");
     }
 
     private boolean showBlankOverlay() {
