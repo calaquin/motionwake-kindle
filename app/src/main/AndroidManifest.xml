@@ -29,13 +29,13 @@
 
         <activity
             android:name=".DashboardActivity"
-            android:exported="false"
+            android:exported="true"
             android:screenOrientation="landscape"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
         <service
             android:name=".MotionWakeService"
-            android:exported="false" />
+            android:exported="true" />
 
         <receiver
             android:name=".BootReceiver"

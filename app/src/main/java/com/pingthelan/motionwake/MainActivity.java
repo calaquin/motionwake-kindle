@@ -148,12 +148,19 @@ public class MainActivity extends Activity {
         setContentView(scroll);
 
         updateScreenOffStatus();
+
+        if (getIntent() != null && getIntent().getBooleanExtra("auto_start", true)) {
+            startMotionWake();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         updateScreenOffStatus();
+        if (getIntent() != null && getIntent().getBooleanExtra("auto_start", false)) {
+            startMotionWake();
+        }
     }
 
     @Override
