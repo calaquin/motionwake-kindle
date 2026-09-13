@@ -36,6 +36,11 @@ public class DashboardActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Package replacement stops the running service. Ensure that opening
+        // the dashboard directly also restores motion detection and the
+        // automatic screen-off timer.
+        startService(new Intent(this, MotionWakeService.class));
+
         applyBaseWindowFlags();
         resumeDashboardDisplay(
                 getIntent() != null

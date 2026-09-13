@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Color;
 import android.os.Handler;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -44,9 +45,12 @@ public class DashboardWebView extends WebView {
     @SuppressWarnings("deprecation")
     private void configure() {
         setBackgroundColor(Color.BLACK);
-        setVerticalScrollBarEnabled(false);
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        setVerticalScrollBarEnabled(true);
         setHorizontalScrollBarEnabled(false);
         setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
 
         WebSettings settings = getSettings();
         settings.setJavaScriptEnabled(true);
@@ -110,6 +114,14 @@ public class DashboardWebView extends WebView {
                 }
             }
         });
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (!isFocused()) {
+            requestFocus();
+        }
+        return super.onTouchEvent(event);
     }
 
     public void start() {
