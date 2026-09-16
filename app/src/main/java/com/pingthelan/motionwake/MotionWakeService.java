@@ -49,6 +49,7 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     private View blankOverlayView;
     private DashboardWebView dashboardOverlayView;
     private boolean realScreenOffActive;
+    private TabletTelemetry tabletTelemetry;
 
     private final Handler handler = new Handler();
 
@@ -118,6 +119,9 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
         acquireCpuWakeLock();
         startCamera();
         scheduleBlank();
+
+        tabletTelemetry = new TabletTelemetry(this);
+        tabletTelemetry.start();
     }
 
     @Override
@@ -141,6 +145,11 @@ public class MotionWakeService extends Service implements Camera.PreviewCallback
     public void onDestroy() {
         handler.removeCallbacks(blankRunnable);
         handler.removeCallbacks(lockNowRunnable);
+
+        if (tabletTelemetry != null) {
+            tabletTelemetry.stop();
+            tabletTelemetry = null;
+        }
 
         removeBlankOverlay();
         removeDashboardOverlay();
